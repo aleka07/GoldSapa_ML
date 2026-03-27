@@ -236,11 +236,26 @@ def _():
 
 @app.cell
 def _(daily, holidays, np, pd):
+    # ─── Фильтрация товаров ─────────────────────────────────
+    EXCLUDE_KEYWORDS = ["Бумага", "Пакет", "Заезд", "Пленка", "Скотч", "Коробка"]
+    MIN_DAYS_SOLD = 60
+    MIN_AVG_PER_DAY = 10
+
+    fe = daily.copy()
+    # Убрать не-производственные позиции
+    mask = ~fe["Номенклатура"].str.contains("|".join(EXCLUDE_KEYWORDS), case=False, na=False)
+    fe = fe[mask]
+    # Только активные товары
+    stats = fe.groupby("Номенклатура").agg(
+        days_sold=("Date", "nunique"), avg_qty=("Количество", "mean"))
+    active = stats[(stats["days_sold"] >= MIN_DAYS_SOLD) & (stats["avg_qty"] >= MIN_AVG_PER_DAY)].index
+    fe = fe[fe["Номенклатура"].isin(active)]
+    n_filtered = daily["Номенклатура"].nunique() - fe["Номенклатура"].nunique()
+
     # ─── Feature Engineering V4 ─────────────────────────────
     KZ_HOLIDAYS = holidays.Kazakhstan(years=range(2023, 2028))
     holiday_dates = sorted(KZ_HOLIDAYS.keys())
 
-    fe = daily.copy()
     dt = pd.to_datetime(fe["Date"])
 
     # Календарь
@@ -355,9 +370,11 @@ def _(daily, holidays, np, pd):
 
 @app.cell
 def _(fe, mo):
+    n_products = fe["Номенклатура"].nunique()
     mo.md(f"""
     ### ✅ Feature Engineering завершён
 
+    - **Товаров после фильтрации**: {n_products} (активные производственные)
     - **Строк**: {len(fe):,}
     - **Признаков**: {len(fe.columns)}
     - **Период**: {fe['Date'].min().strftime('%d.%m.%Y')} — {fe['Date'].max().strftime('%d.%m.%Y')}
@@ -532,6 +549,11 @@ def _(TARGET, ens_pred, np, px, val_df):
     )
     fig_scatter.update_layout(height=500, width=600)
     fig_scatter
+    return
+
+
+@app.cell
+def _():
     return
 
 

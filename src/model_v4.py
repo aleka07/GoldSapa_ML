@@ -276,6 +276,45 @@ NUM_FEATURES = [
 
 ALL_FEATURES = CAT_FEATURES + NUM_FEATURES
 
+# Не-производственные позиции (не идут в печь)
+EXCLUDE_KEYWORDS = ["Бумага", "Пакет", "Заезд", "Пленка", "Скотч", "Коробка"]
+
+# Минимальные пороги
+MIN_DAYS_SOLD = 60      # минимум 60 дней продаж
+MIN_AVG_PER_DAY = 10    # минимум 10 шт/день в среднем
+
+
+def filter_products(df: pd.DataFrame) -> pd.DataFrame:
+    """Оставить только активные производственные товары."""
+    df = df.copy()
+
+    before = df["Номенклатура"].nunique()
+
+    # 1. Убрать не-производственные позиции
+    mask = ~df["Номенклатура"].str.contains(
+        "|".join(EXCLUDE_KEYWORDS), case=False, na=False
+    )
+    df = df[mask]
+
+    # 2. Статистика по товарам
+    stats = df.groupby("Номенклатура").agg(
+        days_sold=("Date", "nunique"),
+        avg_qty=("Количество", "mean"),
+    )
+
+    # 3. Фильтр: достаточно истории и объёма
+    active = stats[
+        (stats["days_sold"] >= MIN_DAYS_SOLD) &
+        (stats["avg_qty"] >= MIN_AVG_PER_DAY)
+    ].index
+
+    df = df[df["Номенклатура"].isin(active)]
+    after = df["Номенклатура"].nunique()
+
+    logger.info("Фильтр товаров: %d → %d (убрано %d малоактивных/нерелевантных)",
+                before, after, before - after)
+    return df
+
 
 def prepare_data():
     """Полный FE пайплайн → (train, val, all_features)."""
@@ -284,6 +323,11 @@ def prepare_data():
 
     logger.info("═══ V4 Feature Engineering ═══")
     logger.info("Исходных строк: %d", len(df))
+
+    # Фильтрация товаров
+    df = filter_products(df)
+    logger.info("После фильтрации: %d строк, %d товаров",
+                len(df), df["Номенклатура"].nunique())
 
     df = add_calendar(df)
     df = add_weather(df)
