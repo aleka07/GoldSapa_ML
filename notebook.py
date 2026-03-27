@@ -199,10 +199,6 @@ def _(daily, px):
     return
 
 
-# ═══════════════════════════════════════════════════════════════
-#  MODEL V4 — Feature Engineering + Training
-# ═══════════════════════════════════════════════════════════════
-
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""
@@ -225,11 +221,21 @@ def _():
     from catboost import CatBoostRegressor, Pool
     import lightgbm as lgb
     from sklearn.metrics import mean_absolute_error, root_mean_squared_error, r2_score
-    return CatBoostRegressor, Pool, lgb, np, holidays, mean_absolute_error, root_mean_squared_error, r2_score
+
+    return (
+        CatBoostRegressor,
+        Pool,
+        holidays,
+        lgb,
+        mean_absolute_error,
+        np,
+        r2_score,
+        root_mean_squared_error,
+    )
 
 
 @app.cell
-def _(daily, pd, np, holidays):
+def _(daily, holidays, np, pd):
     # ─── Feature Engineering V4 ─────────────────────────────
     KZ_HOLIDAYS = holidays.Kazakhstan(years=range(2023, 2028))
     holiday_dates = sorted(KZ_HOLIDAYS.keys())
@@ -344,7 +350,6 @@ def _(daily, pd, np, holidays):
     fill_cols = [c for c in fe.columns if c.startswith(("lag_","ma_","ewma_","std_","trend_","momentum","qty_same","yoy_"))]
     fe[fill_cols] = fe[fill_cols].fillna(0)
     fe["yoy_ratio"] = fe["yoy_ratio"].clip(0, 10)
-
     return (fe,)
 
 
@@ -361,7 +366,17 @@ def _(fe, mo):
 
 
 @app.cell
-def _(fe, np, pd, CatBoostRegressor, Pool, lgb, mean_absolute_error, root_mean_squared_error, r2_score):
+def _(
+    CatBoostRegressor,
+    Pool,
+    fe,
+    lgb,
+    mean_absolute_error,
+    np,
+    pd,
+    r2_score,
+    root_mean_squared_error,
+):
     # ─── Обучение моделей ───────────────────────────────────
     CAT_FEATURES = ["Номенклатура_Key", "Склад_Key"]
     NUM_FEATURES = [
@@ -427,7 +442,7 @@ def _(fe, np, pd, CatBoostRegressor, Pool, lgb, mean_absolute_error, root_mean_s
         valid_sets=[val_ds], valid_names=["val"],
         callbacks=[lgb.early_stopping(100), lgb.log_evaluation(0)],
     )
-    lgb_pred = np.maximum(lgb_model.predict(val_df[ALL_FEATURES]), 0)
+    lgb_pred = np.maximum(lgb_model.predict(val_lgb[ALL_FEATURES]), 0)
     lgb_metrics = _eval(val_df[TARGET].values, lgb_pred)
 
     # ─── Ensemble ──────────────────────────────────────────
@@ -449,14 +464,15 @@ def _(fe, np, pd, CatBoostRegressor, Pool, lgb, mean_absolute_error, root_mean_s
         {"Модель": "V4 LightGBM ⚡", **lgb_metrics},
         {"Модель": "V4 Ensemble ⚡", **ens_metrics},
     ])
-
-    return ALL_FEATURES, cb_model, cb_pred, cb_metrics, lgb_model, lgb_pred, lgb_metrics, ens_pred, ens_metrics, fi, results, val_df, TARGET
+    return TARGET, ens_pred, fi, results, val_df
 
 
 @app.cell(hide_code=True)
-def _(mo, results):
+def _(mo):
     # Таблица сравнения моделей
-    mo.md("### 📊 Сравнение всех моделей")
+    mo.md("""
+    ### 📊 Сравнение всех моделей
+    """)
     return
 
 
@@ -467,9 +483,11 @@ def _(mo, results):
 
 
 @app.cell(hide_code=True)
-def _(fi, px, mo):
+def _(mo):
     # Feature Importance
-    mo.md("### 🏆 Feature Importance (CatBoost V4)")
+    mo.md("""
+    ### 🏆 Feature Importance (CatBoost V4)
+    """)
     return
 
 
@@ -488,12 +506,14 @@ def _(fi, px):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md("### 🎯 Факт vs Прогноз (валидация 2026)")
+    mo.md("""
+    ### 🎯 Факт vs Прогноз (валидация 2026)
+    """)
     return
 
 
 @app.cell
-def _(val_df, ens_pred, px, np, TARGET):
+def _(TARGET, ens_pred, np, px, val_df):
     import pandas as _pd
     scatter_df = _pd.DataFrame({
         "Факт": val_df[TARGET].values,
