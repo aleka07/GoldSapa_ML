@@ -370,15 +370,19 @@ def _(daily, holidays, np, pd):
 
 @app.cell
 def _(fe, mo):
-    n_products = fe["Номенклатура"].nunique()
-    mo.md(f"""
-    ### ✅ Feature Engineering завершён
+    def _():
+        n_products = fe["Номенклатура"].nunique()
+        return mo.md(f"""
+        ### ✅ Feature Engineering завершён
 
-    - **Товаров после фильтрации**: {n_products} (активные производственные)
-    - **Строк**: {len(fe):,}
-    - **Признаков**: {len(fe.columns)}
-    - **Период**: {fe['Date'].min().strftime('%d.%m.%Y')} — {fe['Date'].max().strftime('%d.%m.%Y')}
-    """)
+        - **Товаров после фильтрации**: {n_products} (активные производственные)
+        - **Строк**: {len(fe):,}
+        - **Признаков**: {len(fe.columns)}
+        - **Период**: {fe['Date'].min().strftime('%d.%m.%Y')} — {fe['Date'].max().strftime('%d.%m.%Y')}
+        """)
+
+
+    _()
     return
 
 
@@ -552,8 +556,159 @@ def _(TARGET, ens_pred, np, px, val_df):
     return
 
 
+# ═══════════════════════════════════════════════════════════════
+#  АНАЛИЗ МОДЕЛИ
+# ═══════════════════════════════════════════════════════════════
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ### 📉 Распределение ошибок
+    """)
+    return
+
+
 @app.cell
-def _():
+def _(TARGET, ens_pred, np, px, val_df):
+    import pandas as _pd
+    errors = val_df[TARGET].values - np.round(ens_pred, 1)
+    err_df = _pd.DataFrame({"Ошибка (шт)": errors})
+
+    fig_hist = px.histogram(
+        err_df, x="Ошибка (шт)", nbins=100,
+        title="Распределение ошибок прогноза (Факт − Прогноз)",
+        color_discrete_sequence=["steelblue"],
+    )
+    fig_hist.add_vline(x=0, line_dash="dash", line_color="red")
+    fig_hist.add_vline(x=errors.mean(), line_dash="dot", line_color="orange",
+                       annotation_text=f"Среднее: {errors.mean():.1f}")
+    fig_hist.update_layout(height=400)
+    fig_hist
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ### 🏪 MAE по товарам (топ-20 по ошибке)
+    """)
+    return
+
+
+@app.cell
+def _(TARGET, ens_pred, np, px, val_df):
+    import pandas as _pd
+    val_err = val_df[["Номенклатура", TARGET]].copy()
+    val_err["pred"] = np.round(ens_pred, 1)
+    val_err["abs_error"] = abs(val_err[TARGET] - val_err["pred"])
+
+    mae_by_product = (
+        val_err.groupby("Номенклатура")
+        .agg(
+            MAE=("abs_error", "mean"),
+            Среднее_шт=(TARGET, "mean"),
+            Записей=("abs_error", "count"),
+        )
+        .sort_values("MAE", ascending=False)
+        .head(20)
+        .sort_values("MAE")
+    )
+    mae_by_product["MAPE_%"] = (mae_by_product["MAE"] / mae_by_product["Среднее_шт"].clip(lower=1) * 100).round(1)
+
+    fig_mae = px.bar(
+        mae_by_product.reset_index(), x="MAE", y="Номенклатура",
+        orientation="h", color="MAPE_%",
+        title="Топ-20 товаров с наибольшей ошибкой (MAE)",
+        color_continuous_scale="OrRd",
+        hover_data=["Среднее_шт", "MAPE_%"],
+    )
+    fig_mae.update_layout(height=600, showlegend=False)
+    fig_mae
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, val_df):
+    # Dropdown для выбора товара для анализа
+    val_products = sorted(val_df["Номенклатура"].unique().tolist())
+    analysis_product = mo.ui.dropdown(
+        options=val_products,
+        value=val_products[0],
+        label="Товар для анализа",
+    )
+    mo.md(f"""
+    ### 📈 Факт vs Прогноз по дням (конкретный товар)
+
+    {analysis_product}
+    """)
+    return (analysis_product,)
+
+
+@app.cell
+def _(TARGET, analysis_product, ens_pred, go, np, val_df):
+    import pandas as _pd
+    # Фильтруем val по выбранному товару
+    mask = val_df["Номенклатура"] == analysis_product.value
+    prod_val = val_df[mask].copy()
+    prod_val["Прогноз"] = np.round(ens_pred[mask.values], 1)
+
+    # Агрегация по дню (суммируем по складам)
+    prod_daily = prod_val.groupby("Date", as_index=False).agg(
+        Факт=(TARGET, "sum"), Прогноз=("Прогноз", "sum")
+    ).sort_values("Date")
+
+    fig_ts = go.Figure()
+    fig_ts.add_trace(go.Scatter(
+        x=prod_daily["Date"], y=prod_daily["Факт"],
+        mode="lines+markers", name="Факт",
+        line=dict(color="steelblue", width=2), marker=dict(size=4),
+    ))
+    fig_ts.add_trace(go.Scatter(
+        x=prod_daily["Date"], y=prod_daily["Прогноз"],
+        mode="lines+markers", name="Прогноз",
+        line=dict(color="coral", width=2, dash="dot"), marker=dict(size=4),
+    ))
+    mae_prod = abs(prod_daily["Факт"] - prod_daily["Прогноз"]).mean()
+    fig_ts.update_layout(
+        title=f"{analysis_product.value} — MAE: {mae_prod:.1f} шт",
+        yaxis_title="шт/день", height=450,
+    )
+    fig_ts
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    ### 📊 Суммарная ошибка по дням (все товары)
+    """)
+    return
+
+
+@app.cell
+def _(TARGET, ens_pred, go, np, val_df):
+    import pandas as _pd
+    agg_daily = val_df[["Date", TARGET]].copy()
+    agg_daily["Прогноз"] = np.round(ens_pred, 1)
+
+    daily_agg = agg_daily.groupby("Date", as_index=False).agg(
+        Факт=(TARGET, "sum"), Прогноз=("Прогноз", "sum")
+    ).sort_values("Date")
+    daily_agg["Ошибка"] = daily_agg["Факт"] - daily_agg["Прогноз"]
+    daily_agg["Ошибка_%"] = (daily_agg["Ошибка"] / daily_agg["Факт"].clip(lower=1) * 100).round(1)
+
+    fig_daily = go.Figure()
+    fig_daily.add_trace(go.Bar(
+        x=daily_agg["Date"], y=daily_agg["Ошибка"],
+        name="Ошибка (шт)",
+        marker_color=["crimson" if e > 0 else "seagreen" for e in daily_agg["Ошибка"]],
+    ))
+    fig_daily.add_hline(y=0, line_dash="dash", line_color="gray")
+    fig_daily.update_layout(
+        title=f"Ежедневная ошибка (Факт − Прогноз). Среднее: {daily_agg['Ошибка'].mean():.0f} шт",
+        yaxis_title="шт", height=400,
+    )
+    fig_daily
     return
 
 
